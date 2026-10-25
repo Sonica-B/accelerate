@@ -181,6 +181,16 @@ _even_batches = object()
 _use_seedable_sampler = object()
 
 
+def _checkpoint_iteration(folder: str) -> int:
+    """
+    Returns the iteration number of a `checkpoint_<iteration>` folder made by `automatic_checkpoint_naming`.
+
+    Only the last path component is read. Both `/` and `\\` count as separators, so a digit in a parent directory
+    (`C:\\runs\\exp1\\checkpoints\\checkpoint_10` on Windows) is not mistaken for the iteration.
+    """
+    return list(map(int, re.findall(r"[\/\\]?([0-9]+)(?=[^\/\\]*$)", folder)))[0]
+
+
 class Accelerator:
     """
     Creates an instance of an accelerator for distributed training or mixed precision training.
@@ -3669,11 +3679,7 @@ class Accelerator:
                 and (len(folders) + 1 > self.project_configuration.total_limit)
                 and self.is_main_process
             ):
-
-                def _inner(folder):
-                    return list(map(int, re.findall(r"[\/]?([0-9]+)(?=[^\/]*$)", folder)))[0]
-
-                folders.sort(key=_inner)
+                folders.sort(key=_checkpoint_iteration)
                 logger.warning(
                     f"Deleting {len(folders) + 1 - self.project_configuration.total_limit} checkpoints to make room for new checkpoint."
                 )
@@ -3831,10 +3837,7 @@ class Accelerator:
             input_dir = os.path.join(self.project_dir, "checkpoints")
             folders = [os.path.join(input_dir, folder) for folder in os.listdir(input_dir)]
 
-            def _inner(folder):
-                return list(map(int, re.findall(r"[\/]?([0-9]+)(?=[^\/]*$)", folder)))[0]
-
-            folders.sort(key=_inner)
+            folders.sort(key=_checkpoint_iteration)
             input_dir = folders[-1]
         else:
             raise ValueError("No input_dir provided and automatic checkpoint naming is disabled.")

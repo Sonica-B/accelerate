@@ -28,6 +28,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from accelerate import Accelerator
+from accelerate.accelerator import _checkpoint_iteration
 from accelerate.test_utils import (
     DEFAULT_LAUNCH_COMMAND,
     execute_subprocess_async,
@@ -375,6 +376,32 @@ class CheckpointTest(AccelerateTestCase):
             assert not os.path.exists(os.path.join(tmpdir, "checkpoints", "checkpoint_0"))
             assert os.path.exists(os.path.join(tmpdir, "checkpoints", "checkpoint_9"))
             assert os.path.exists(os.path.join(tmpdir, "checkpoints", "checkpoint_10"))
+
+    def test_checkpoint_iteration_ignores_digits_in_parent_dirs(self):
+        # Windows paths use `\`, so a digit in a parent directory must not be read as the iteration
+        assert _checkpoint_iteration("C:\\runs\\exp1\\checkpoints\\checkpoint_10") == 10
+        assert _checkpoint_iteration("C:/runs/exp1\\checkpoints\\checkpoint_7") == 7
+        assert _checkpoint_iteration("/runs/exp1/checkpoints/checkpoint_10") == 10
+        folders = [f"D:\\exp2024\\checkpoints\\checkpoint_{i}" for i in (10, 11, 9)]
+        assert sorted(folders, key=_checkpoint_iteration)[-1].endswith("checkpoint_11")
+
+    def test_checkpoint_deletion_and_loading_with_digit_in_project_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = os.path.join(tmpdir, "run1")
+            set_seed(42)
+            model = DummyModel()
+            project_config = ProjectConfiguration(automatic_checkpoint_naming=True, total_limit=2)
+            accelerator = Accelerator(project_dir=project_dir, project_config=project_config)
+            model = accelerator.prepare(model)
+            for _ in range(12):
+                accelerator.save_state(safe_serialization=self.use_safetensors)
+            checkpoints_dir = os.path.join(project_dir, "checkpoints")
+            assert sorted(os.listdir(checkpoints_dir)) == ["checkpoint_10", "checkpoint_11"]
+
+            loaded_from = []
+            accelerator.register_load_state_pre_hook(lambda models, input_dir: loaded_from.append(input_dir))
+            accelerator.load_state()
+            assert os.path.basename(loaded_from[0]) == "checkpoint_11"
 
     @run_first
     @require_non_cpu
